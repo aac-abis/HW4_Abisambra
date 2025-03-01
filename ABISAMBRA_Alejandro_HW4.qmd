@@ -1,0 +1,644 @@
+---
+title: "HW 4 Missing Data & Model Selection: Data Analysis Problems "
+subtitle: "Advanced Regression (STAT 353-0)"
+author: "Alejandro Abisambra"
+pagetitle: "HW 4 Abisambra"
+date: 2/28/2025
+
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    toc-location: left
+    embed-resources: true
+    code-fold: false
+    link-external-newwindow: true
+    theme: cosmo
+
+execute:
+  warning: false
+
+from: markdown+emoji
+reference-location: margin
+citation-location: margin
+---
+
+::: {.callout-tip icon=false}
+
+## Github Repo Link
+
+A link to your GitHub repo should be placed at the top your submitted html.
+
+**Here is a link to my Git Repo** <https://github.com/aac-abis/HW4_Abisambra>
+
+:::
+
+::: {.callout-important}
+
+All students are required to complete this problem set!
+
+:::
+
+```{r}
+#| include: false
+
+library(tidyverse)
+library(tidymodels)
+library("car")
+library(stargazer)
+library(MASS)
+library(mice)
+library(modelsummary)
+library(sampleSelection)
+library(censReg)
+
+
+# Read datasets
+undta <- read.csv("data/UnitedNations.txt", sep = "", header = T)
+
+```
+
+
+
+## Data analysis problems
+
+### 1. Exercise D20.1 (MI)
+
+Using the United Nations social-indicators data (in `UnitedNations.txt`), develop a regression model for the response variable female expectation of life. Feel free to use whatever explanatory variables in the data set make sense to you and to employ variable transformations, if needed.
+
+(a) Work initially with complete cases, and once you have an apparently satisfactory model, obtain estimates and standard errors of the regression coefficients.
+
+::: {.callout-tip icon="false"}
+## Solution
+
+1. Limit to complete cases only. 
+
+**Note: only 39 observations (out of 207) remain after limiting to cases that have no NA values**.
+
+```{r}
+undta_complete <-  undta %>% dplyr::filter(if_all(everything(), ~ !is.na(.))) %>%
+                      dplyr::select(lifeFemale, everything())
+
+```
+
+
+2. Now test different models. I begin by including variables that seem like more potential proximate causes/covariates (education, mortality, economic activity, literacy, contraception). Then, at a second round of models, I explore including more "catch-all" variables like gdp, region, tfr.
+```{r}
+m1a <- lm(lifeFemale ~ infantMortality + educationFemale + 
+            economicActivityFemale + illiteracyFemale + contraception, 
+          data = undta_complete)
+
+Anova(m1a)
+```
+2.1. Exploring non-linear relationships
+```{r}
+GGally::ggpairs(undta_complete, columns = c("lifeFemale", "infantMortality", "educationFemale", 
+            "economicActivityFemale", "illiteracyFemale", "contraception"),
+            progress = F)
+```
+As we can see, there might be a non-linear relationship between Female life expectancy and contraception and economic activity. I will explore quadratic terms for contraception and economic activity. 
+
+```{r}
+m1b <- lm(lifeFemale ~ infantMortality + educationFemale + 
+            poly(economicActivityFemale, 2, raw = T) + illiteracyFemale + 
+            poly(contraception, 2, raw = T), 
+          data = undta_complete)
+
+anova(m1a, m1b)
+
+```
+As we can see from the anova comparison of the (nested) models, adding the quadratic terms does not statistically significantly improve the global fit of the model. As such, I will proceed with the purely linear model.
+
+```{r}
+Anova(m1a)
+```
+Further, an Anova analysis of the linear model (m1a) that is not sensitive to the order of the terms shows that the education and contraception terms are not statistically significant in terms of fit improvements.
+
+As such, I will proceed with a trimmed model that only includes infant mortality, economic activity, and literacy rate as proximate covariates. On top of these, I will explore whether adding more "catch all" covariates significantly improves model fit. 
+
+2.2. Exploring models with the inclusion of "catch-all" variables like gdp, tfr, and region.
+```{r}
+#| code-fold: true
+undta_complete$region <- as.factor(undta_complete$region)
+contrasts(undta_complete$region) <- contr.treatment(levels(undta_complete$region),
+                                                    base = 1)
+# I set the base region as Africa, given that it has the lowest life expectancy of all. So all region coefficients will be relative to Africa, which has the lowest one. 
+
+```
+
+
+```{r}
+m1c <- lm(lifeFemale ~ infantMortality + educationFemale + 
+            economicActivityFemale + illiteracyFemale + contraception +
+            GDPperCapita + tfr + region, 
+          data = undta_complete)
+```
+
+Now exploring non-linearity in the new added covariates.
+```{r}
+GGally::ggpairs(undta_complete, columns = c("lifeFemale", "tfr", "GDPperCapita"),
+            progress = F)
+```
+As we can see from scatterplots above, GDP per Capita is highly skewed, so I will also run a model with log(GDP) to assess fit of this transformation. 
+
+```{r}
+m1d <- lm(lifeFemale ~ infantMortality + educationFemale + 
+            economicActivityFemale + illiteracyFemale + contraception +
+            log(GDPperCapita) + tfr + region, 
+          data = undta_complete)
+```
+
+3. Compare Specifications and Pick the Preferred One.
+```{r}
+anova(m1c, m1d)
+
+stargazer(m1c, m1d, type = "text")
+```
+The anova comparison of the models with the GDP-per-Capita and log(GDP-per-capita) shows that the log-transformation actually reduces global fit of the model. In addition, as shown in the comparative table above, neither GDP or the log-GDP are statistically significant in the model specifications. 
+
+As a consequence, I will continue to explore the covariates for model m1c that does not include the log transformation. 
+
+```{r}
+Anova(m1c)
+```
+As we can see from the Anova (type II) table above, only the following covariates are statistically significant in terms of their added-value to the model's global fit: Infant Mortality, Economic Activity, TFR, and the region categories.
+
+As a result, on grounds of parsimony, my preferred specification is as follows:
+
+```{r}
+m1e <- lm(lifeFemale ~ infantMortality + economicActivityFemale +
+                          tfr + region, 
+          data = undta_complete)
+
+Anova(m1e)
+```
+The coefficients and SE's of the preferred specification are as follows. The variables have NOT been centered or standardized.
+```{r}
+stargazer(m1e, type = "text")
+```
+
+:::
+
+(b) Now redo your analysis in (a) but use multiple imputation.
+
+::: {.callout-tip icon="false"}
+## Solution
+
+Re-doing the same steps, but using the entire dataset and using Multiple Imputation to deal with the missing data issues. (MICE)
+
+First, I create the imputed data and save it (for replicability and efficiency purposes). Then I will just load the saved data in the future, instead of re-running the imputation each time. 
+
+```{r}
+#| include: false
+undta$region <- as.factor(undta$region)
+contrasts(undta$region) <- contr.treatment(levels(undta$region),
+                                                    base = 1)
+```
+
+
+```{r}
+#| results: hide
+# For replicability purposes, save the random seed that will be used
+# seed_num <- as.numeric(Sys.time())  ### result: 1740758008
+set.seed(1740758008)
+
+# Run the Multiple Imputation
+imputed_data <- mice(undta, m = 20, maxit = 10, print = F)
+save(imputed_data, file = here::here("data/imp_data.rda"))
+```
+
+Now, I proceed to run the same models as in the previous step, but using the full data that includes the imputations. 
+
+```{r}
+m1a_mice <- with(imputed_data, {
+  lm(lifeFemale ~ infantMortality + educationFemale + 
+     economicActivityFemale + illiteracyFemale + contraception)
+})
+
+
+m1b_mice <- with(imputed_data, {
+  lm(lifeFemale ~ infantMortality + educationFemale + 
+            poly(economicActivityFemale, 2, raw = T) + illiteracyFemale + 
+            poly(contraception, 2, raw = T))
+})
+
+
+m1c_mice <- with(imputed_data, {
+  lm(lifeFemale ~ infantMortality + educationFemale + 
+            economicActivityFemale + illiteracyFemale + contraception +
+            GDPperCapita + tfr + region)
+})
+
+
+m1d_mice <- with(imputed_data, {
+  lm(lifeFemale ~ infantMortality + educationFemale + 
+            economicActivityFemale + illiteracyFemale + contraception +
+            log(GDPperCapita) + tfr + region)
+})
+
+
+m1e_mice <- with(imputed_data, {
+  lm(lifeFemale ~ infantMortality + economicActivityFemale +
+            tfr + region)
+})
+```
+
+:::
+
+(c) Compare these results to those from the complete-case analysis. What do you conclude?
+
+::: {.callout-tip icon="false"}
+## Solution
+
+Given the nature of the MICE pooled results, and the fact that the complete model and the imputed pooled model have different total observations and degrees of freedom, I will only compare the sign, magnitude and significant of the coefficients between the 2 models, on each of my analytical steps above.
+
+For brevity, I will only compare the models that were particularly relevant for decision-making in my answer 1 above. In particular, models. I will compare the output of the complete cases vs multiple imputed data.
+
+* **m1a** <- lifeFemale ~ infantMortality + educationFemale + 
+            economicActivityFemale + illiteracyFemale + contraception 
+          
+* **m1c** <- lifeFemale ~ infantMortality + educationFemale + 
+            economicActivityFemale + illiteracyFemale + contraception +
+            GDPperCapita + tfr + region
+
+* **m1e** <- lifeFemale ~ infantMortality + economicActivityFemale +
+            tfr + region
+
+### Model 1a : proximate covariates
+```{r}
+modelsummary(list("Complete Data" = m1a, "Imputed Data" = pool(m1a_mice)),
+             stars = T)
+```
+
+As we can see from the comparison above, the coefficients and significance are largely stable between the two models, with a few notable exceptions.
+
+* Economic Activity Female: Same sign, but imputed model has **lower magnitude** and meaningful **drop in significance**. This is important because based on the complete cases, this covariate was deemed relevant and included in my final specification.
+
+* Contraception: Same sign, but imputed model has **larger** magnitude and a meaningful **increase** in significance. Based on Anova tests of complete cases, this covariate was not included in my final model specification. The imputed model provides evidence to question that decision. 
+
+
+### Model 1c: proximate covariates + "catch all" covariates like GDP, region, and tfr
+```{r}
+modelsummary(list("Complete Data" = m1c, "Imputed Data" = pool(m1c_mice)),
+             stars = T)
+```
+
+Based on the additional information provided by the MICE Pooled coefficients and significance levels, the model that includes both the proximate covariates and the 'catch-all' ones seems to validate the selection of covariates for the final model.
+
+Using the complete cases only, and based on LRT tests and goodness of fit statistics, the final specification only included the following covariates: 
+
+$$lifeExpectancyFemale = infantMortality + economicActivityFemale + tfr + region$$
+These are precisely the covariates that have statistical significance (albeit at different critical levels) both under the complete cases and the multiple imputation pooled model. This outcome is reassuring. 
+
+Now, let's see how the final specification performs when comparing the complete and imputed models. 
+
+### Model 1e: Only selected covariates
+```{r}
+modelsummary(list("Complete Data" = m1e, "Imputed Data" = pool(m1e_mice)),
+             stars = T)
+```
+
+My final model has similar levels of predictive power across both datasets (measured in R2, which are very similar across both).
+
+In addition, the significance, magnitudes, and direction of the relationships remains largely stable between the models ran using both types of dataset. I would argue that the differences are not meaningful. 
+
+The broad consistence between the models with imputed data and those that only used complete cases is reassuring. It suggests that the missing data was likely to be missing at random (or close to it), in a way that is not likely to bias the results if one used only the complete cases and discarded the missing observations. 
+
+:::
+
+
+### 2. Exercise D20.3 (Selection)
+
+Long (1997) reports a regression in which the response variable is the prestige of the academic departments where PhDs in biochemistry find their first jobs. The data are in the file `Long-PhDs.txt`.
+
+Prestige is measured on a scale that runs from 1.00 to 5.00, and is unavailable for departments without graduate programs and for departments with ratings below 1.00. The explanatory variables include a dummy regressor for gender; the prestige of the department in which the individual obtained his or her PhD; the number of citations received by the individualís mentor; a dummy regressor coding whether or not the individual held a fellowship; the number of articles published by the individual; and the number of citations received by the individual.
+
+Estimate the regression of prestige of first job on the other variables in three ways:
+
+(a) code all of the missing values as 1.00 and perform an OLS regression;
+
+::: {.callout-tip icon="false"}
+## Solution
+
+1. Load data and explore what data is missing
+
+```{r}
+long <- read.csv("data/Long-PhDs.txt", sep = "", header = T)
+naniar::miss_var_summary(long)
+
+```
+
+2. Impute values and run OLS
+```{r}
+long_imp1 <- long
+long_imp1 <- long_imp1 %>% mutate(job = if_else(is.na(job), 1, job))
+# naniar::miss_var_summary(long_imp1)  ### all looks good
+
+m2a <- lm(job ~ gender + phd + mentor + fellowship + articles + citations,
+          data = long_imp1)
+```
+
+
+:::
+
+(b) treat the missing values as truncated at 1.00 and employ Heckmanís selection-regression model;
+
+::: {.callout-tip icon="false"}
+## Solution
+
+1. Create a binary indicator var for missingness
+
+```{r}
+long <- long %>% mutate(missvar = case_when((job == 1 | is.na(job)) ~ 0,
+                                            job > 1 ~ 1))
+
+# If observation is truncated (job missing or ==1 ), then missvar = 0
+# Otherwise, missvar == 1
+```
+
+Now, run the Heckman selection-regression model:
+
+```{r}
+m2b <- selection(missvar ~ gender + phd + mentor + fellowship + articles + citations,
+                 job ~ gender + phd + mentor + fellowship + articles + citations, 
+                 data = long)
+```
+
+I decided to include all covariates in the selection model and in the outcome model. I don't have good reasons to believe that some covariates were particularly important to determine the missingness (truncation) of the data (absence of prestige ranking for the job).
+
+:::
+
+(c) treat the missing values as censored and fit the Tobit model.
+
+::: {.callout-tip icon="false"}
+## Solution
+
+First, note that I will treat this as a left-censored model. We have no reason to believe the data is censored on the upper-tail of the job prestige ranking. So I will treat the censoring as only occurring for the lower-tail of the distribution (rankings <= 1).
+
+This is why it is appropriate to use a Tobit model (that only accounts for censoring on one side, typically left-censoring) instead of thinking of models for both upper and lower-tail censoring. 
+
+```{r}
+m2c <- censReg(job ~ gender + phd + mentor + fellowship + articles + citations,
+               left = 1, right = Inf, data = long_imp1)
+```
+
+:::
+
+(d) Compare the estimates and coefficient standard errors obtained by the three approaches. Which of these approaches makes the most substantive sense?
+
+::: {.callout-tip icon="false"}
+## Solution
+
+Comparative Table of Coefficients, Errors, and Significance below. 
+
+```{r}
+stargazer(m2a, m2b, m2c, type = "text")
+
+```
+
+In general, the coefficients and significance levels across the specifications seem stable. Especially if we consider the magnitudes of the prestige scale that runs up to 5. 
+
+The most salient differences are: (caveat: by "effect" I don't mean it in strong causation language terms. Just association.)
+
+* The effect of **prestige of PhD program** meaningfully increases once we account for truncation/censoring of the data, with respect to simple OLS. Coefficients and errors are very similar in Heckman and Censored. Highly significant across three specs. This suggests that there may be a correlation between the job data being missing and the PhD prestige to begin with. 
+
+* Coefficient for **Fellowship** is meaningfully larger for the censored model than the OLS or Heckman selection. All highly significant across 3 specifications. 
+
+* Coefficient for **Gender=male** is also meaningfully larger in censored model (w.r.t. OLS or Heckman). In addition, **Gender** is highly significant under a censored model, but not in the other two specifications. 
+
+* It suggests that both fellowship and gender may be associated with the likelihood of the data being censored and registered as job prestige = 1. In particular, it suggests that being female is positively associated with the data being censored at 1. 
+
+:::
+
+### 3. Exercise (Bootstrap)
+
+We will now consider the `Boston` housing dataset from the `MASS` package.
+
+```{r}
+# load Boston data
+data(Boston, package = "MASS")
+```
+
+Run `??Boston` in console to see codebook.
+
+(a) Provide an estimate of the population mean of `medv`. Call this estimate $\hat{\mu}$.
+
+::: {.callout-tip icon="false"}
+## Solution
+
+The estimate $\hat{\mu}_{medv}$ for the population mean of medv is simply the mean of our Boston sample, as below.
+
+```{r}
+(medv_mu.hat <- mean(Boston$medv))
+```
+
+:::
+
+(b) What is the formula for the standard error of an estimate of the mean? Use this to provide an estimate of the standard error of $\hat{\mu}$ in (a).
+
+::: {.callout-tip icon="false"}
+## Solution
+
+The formula for the Standard Error of the sample mean is as follows:
+
+$SE_{\hat{\mu}} = \frac{s}{\sqrt{n}} \; = \frac{\sqrt{\frac{\sum_{i=1}^n (x_i - \bar{x})^2}{n-1}}}{\sqrt{n}}$
+
+In this case, $\bar{x}$ is the sample mean of medv that I estimated above, and $n = 506$.
+
+Luckily, we can easily calculate this using the var() function in R and a couple of minor adjustments.
+
+```{r}
+sqrt(var(Boston$medv))/sqrt(506)
+```
+:::
+
+(c) Estimate this standard error using the bootstrap. How does this compare to the answer from (b)?
+
+::: {.callout-tip icon="false"}
+## Solution
+
+I will estimate the standard error by creating 100,000 bootstrap samples of size $n = 506$ which is the same size as the original Boston sample data we had. 
+
+```{r}
+boot_samples <- as.data.frame(Boston$medv) %>% rename(medv = 1) %>% 
+                bootstraps(.,times = 100000)
+boot_means <- c()
+boot_se <- c()
+n = 506
+
+for(i in 1:100000){
+  boot_means[i] <-  mean(analysis(boot_samples$splits[[i]])$medv)
+  
+  boot_se[i] <- sqrt(var(analysis(boot_samples$splits[[i]])$medv))/sqrt(n)
+  
+}
+
+# Close, but not the best approach. Calculates the SE of each individual boot sample, 
+# and then just takes the average of those. 
+mean(boot_se)
+
+
+# The best approach is this one, which corresponds to the SD of the Sampling Distribution of Means.
+sqrt(var(boot_means))
+
+```
+Using bootstrap re sampling, I estimate the SE of the parameter of interest $SE_{\hat{\mu}}$ to be `r sqrt(var(boot_means))`, which corresponds to the Standard Deviation of the Sampling Distribution of the parameter of interest that has been approximated by bootstrap re sampling. Asymptotically, it should converge to the SE of $SE_{\hat{\mu}}$.
+
+:::
+
+(d) Provide an estimate of $\hat{\mu}_{med}$, the  median value of `medv` in the population.
+
+::: {.callout-tip icon="false"}
+## Solution
+
+The estimate for the Median of `medv` is the median value of the `Boston$medv` variable, as follows:
+
+```{r}
+(median(Boston$medv))
+
+```
+
+:::
+
+(e) Estimate the standard error of $\hat{\mu}_{med}$. Notice that there is no simple formula to do this, so instead use the bootstrap. Comment on your findings.
+
+::: {.callout-tip icon="false"}
+## Solution
+
+```{r}
+boot_medians <- c()
+n = 506
+
+for(i in 1:100000){
+  boot_medians[i] <-  median(analysis(boot_samples$splits[[i]])$medv)
+}
+
+# SD of the sampling distribution of medians : SE of our parameter of interest
+sqrt(var(boot_medians))
+
+```
+Similar to the approach above, the SE of the parameter of interest (in this case the median) is the Standard Deviation of the sampling distribution of the parameter of interest. In this case, the SE of the median corresponds to `r sqrt(var(boot_medians))`.
+:::
+
+### 4. Exercise D22.1 (Model Selection)
+
+The data file `BaseballPitchers.txt` contains salary and performance data for major-league baseball pitchers at the start of the 1987 season. The data are analogous to those for baseball hitters used as an example in the chapter. Be sure to explore the data and think about variables to use as predictors before specifying candidate models.
+
+(a) Employing one or more of the methods of model selection described in the text, develop a regression model to predict pitchers' salaries.
+
+::: {.callout-tip icon="false"}
+## Solution
+
+1. Explore the data and clean/prepare the data
+
+```{r}
+#| code-fold: true
+
+MLB <- read.csv("data/BaseballPitchers.txt", sep = "", header = T) %>% 
+          relocate(salary) %>% dplyr::select(-c(firstName, lastName, team86, team87))
+
+# GGally::ggpairs(MLB, progress = F)  ## Omitted for brevity
+
+MLB <-  MLB %>% mutate(log.salary = log(salary*1000), log.years = log(years), 
+                       free.agent = case_when(years >= 6 ~ 1, 
+                                              T ~ 0)) %>% 
+                mutate(National86 = case_when(league86 == "N" ~ 1,
+                                              T ~ 0),
+                       National87 = case_when(league87 == "N" ~ 1,
+                                              T ~ 0))
+MLB.trim <- MLB %>%  dplyr::select(-c(years, salary, league86, league87))
+```
+
+I have logged the salary (e.g.: log(salary * 1000)) and years, following the advice in the book. I have also created the free.agent category for pitchers with more than 6 yrs of experience. I also created dummy variables for "National" for those players in the national league. There are two versions of this variable, one for 1986 and one for 1987. 
+
+**I assume salary is for 1987, and only use other variables for 1986 or other items in the past, since otherwise it would not make epistemic sense to run the model**. Causes (even loosely interpreted) need to antecede effects.
+
+I further decided to log the games saved (SV), since the `ggpairs` revealed to be highly skewed. And this makes sense, since this is meant to be a rare and low probability occurrence. 
+
+Further, I removed the player's names and team names, since I will not use this individual info in the models. I also created a smaller dataset where I removed variables that I will not use because I transformed them (salary, years, etc). This way, I can more easily run the subset selection process. 
+
+**2. Forward Selection**
+Output of the steps omitted for brevity.
+```{r}
+#| results: hide
+
+## Using the MASS package
+m0.null <- lm(log.salary ~ 1, data = MLB.trim)
+
+m.full <- lm(log.salary ~ . , MLB.trim)
+
+# Step-wise forward selection
+# Using MASS package
+fwd_mod <-  stepAIC(m0.null, scope = list(lower = m0.null, upper = m.full),
+                    direction = "forward")
+```
+
+Resulting "best" model in Forward-Selection
+```{r}
+# View final model
+S(fwd_mod)
+```
+
+**3. Backwards Selection and Forwards-Backwards Selection**
+Output of the steps omitted for brevity.
+```{r}
+#| results: hide
+# Backwards selection
+# Step-wise forward selection
+# Using MASS package
+back_mod <-  stepAIC(m.full, scope = list(lower = m0.null, upper = m.full),
+                    direction = "backward")
+
+mix_mod <- stepAIC(m.full, scope = list(lower = m0.null, upper = m.full),
+                    direction = "both")
+```
+
+
+:::
+
+(b) How successful is the model in predicting salaries? Does the model make substantive sense?
+
+::: {.callout-tip icon="false"}
+## Solution
+
+**Best Models for Each Step-Wise Procedure**
+
+* **Fwd Selection**:  log.salary ~ log.years + careerERA + IP86 + careerIP + free.agent + ERA86 + careerG + careerL + careerW
+
+* **Back Selection**: log.salary ~ ERA86 + IP86 + careerW + careerL + careerERA + careerG + careerIP + log.years + free.agent
+
+* **Fwd-Back Selection**: log.salary ~ ERA86 + IP86 + careerW + careerL + careerERA + careerG + careerIP + log.years + free.agent
+
+**Interpretation of Model Selection**
+
+As we can see from the 'best' models above, the 3 stepwise model selection methods converged to the same model in this instance. This is the combination of predictors that yields the lowest AIC among the options that were available. This convergence is not always guaranteed, but it is a good sign. 
+
+This is the model that yielded the lowest AIC score among the attempted models, and the order of step-wise inclusion/removal of covariates did not lead to changes in the end-result. 
+
+
+**Summary of Model**
+```{r}
+S(back_mod)
+```
+**Interpretation of 'Best' Model**
+
+As we can see from the summary table above, the model does a good job in terms of predictive power. It has an $R^2 = 0.7032$ which is a good result. The model is able to explain a large part of the variance of the outcome, considering that $R^2$ is bounded at 1. 
+
+Furthermore, the individual covariates in the selected model all have a low p-value ($p < 0.05$) with the exception of ERA86, which only has a $p < 0.1$.
+
+Finally, the model makes substantive sense. Important to note that the outcome is log(salary), however. This is important for interpretation purposes. With that in mind, we get intuitions that make sense like the following:
+
+* Being a **free agent** predicts an increase in salary of ~ approximately 35%. 
+
+* An increase of 1% in **years of experience** predicts an approximate increase in salary of 0.88%. Similarly, and given linearity assumptions, a 10% increase in years of experience predicts and increase in salary of approximately 8.8%.
+
+* In terms of frequency of play, we can see that increasing the **number of innings pitched (IP86)** by 10 innings in the 1986 year predicts an increase in salary of ~3.67%.
+
+* Finally, having low **career Earned Run Average (careerERA)** positively predicts salaries and the association is huge! This makes sense, as a pitcher that does not allow their opponents to earn runs is a very valuable one. In the model, increasing the career ERA by one-unit (a.k.a. becoming a worse pitcher) predicts a decrease in salaries by approximately ~48%. This association is very large and statistically significant, but it may be driven by superstar-pitchers with incredibly low ERA's and incredibly high salaries. 
+
+These relationships are intuitive and make sense. 
+
+Interestingly, however, some measures of experience negatively predict salaries. This is unexpected to me, but it is important to *remember that this is after controlling for years of experience* which is also included as a covariate in the model and positively predicts salaries. For example:
+
+* An increase in **carreer game appeareances (careerG)** negatively predicts salary. 10 extra game appeareances predicts a drop in salaries of ~1%. 
+:::
